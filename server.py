@@ -1,5 +1,7 @@
 import os
 import json
+import queue
+import threading
 import requests
 import yfinance as yf
 import pytz
@@ -19,6 +21,10 @@ TICKERS = {
     "이재현": ["GOOGL", "TSM", "MRVL", "NVDA", "MSFT", "AVGO", "RKLB"],
     "이재연": ["GOOGL", "TSM", "MSFT", "NVDA", "LLY", "MRVL", "TSLA"],
 }
+
+# 클라이언트별 큐 저장소
+client_queues = {}
+client_lock = threading.Lock()
 
 def get_portfolio(owner="전체"):
     if owner == "전체":
@@ -85,7 +91,7 @@ def get_changwon_weather():
             95: "뇌우", 96: "뇌우", 99: "뇌우"
         }
         desc = weather_map.get(code, "알 수 없음")
-        return f"창원 날씨: {desc} {temp}C / 강수확률 {precip}%"
+        return f"창원 날씨: {desc} {temp}°C / 강수확률 {precip}%"
     except Exception:
         return "날씨 조회 실패"
 
@@ -112,66 +118,95 @@ TOOLS = [
     }
 ]
 
-@app.route("/")
-def index():
-    return jsonify({"status": "ok", "name": "뀨의 AI 임무 통제실 MCP 서버"})
-
-@app.route("/sse")
-def sse():
-    def generate():
-        init_msg = {
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized",
-            "params": {}
-        }
-        yield f"data: {json.dumps(init_msg)}\n\n"
-
-    return Response(generate(), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-@app.route("/mcp", methods=["POST"])
-def mcp_endpoint():
-    data   = request.get_json()
+def handle_jsonrpc(data):
     method = data.get("method", "")
     req_id = data.get("id")
 
     if method == "initialize":
-        return jsonify({
+        return {
             "jsonrpc": "2.0", "id": req_id,
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "뀨의 AI 임무 통제실", "version": "1.0.0"}
             }
-        })
-
+        }
+    elif method == "notifications/initialized":
+        return None  # 응답 불필요
     elif method == "tools/list":
-        return jsonify({
+        return {
             "jsonrpc": "2.0", "id": req_id,
             "result": {"tools": TOOLS}
-        })
-
+        }
     elif method == "tools/call":
         tool_name = data.get("params", {}).get("name", "")
         arguments = data.get("params", {}).get("arguments", {})
-
         if tool_name == "get_portfolio":
-            owner  = arguments.get("owner", "전체")
-            result = get_portfolio(owner)
+            result = get_portfolio(arguments.get("owner", "전체"))
         elif tool_name == "get_discharge_countdown":
             result = get_discharge_countdown()
         elif tool_name == "get_changwon_weather":
             result = get_changwon_weather()
         else:
             result = f"알 수 없는 도구: {tool_name}"
-
-        return jsonify({
+        return {
             "jsonrpc": "2.0", "id": req_id,
             "result": {"content": [{"type": "text", "text": result}]}
-        })
+        }
+    elif method == "ping":
+        return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+    return {
+        "jsonrpc": "2.0", "id": req_id,
+        "error": {"code": -32601, "message": "Method not found"}
+    }
 
-    return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}})
+@app.route("/")
+def index():
+    return jsonify({"status": "ok", "name": "뀨의 AI 임무 통제실 MCP 서버"})
+
+@app.route("/sse", methods=["GET"])
+def sse():
+    client_id = id(request)
+    q = queue.Queue()
+    with client_lock:
+        client_queues[client_id] = q
+
+    def generate():
+        # 엔드포인트 URL 전송 (Claude가 POST할 주소)
+        base_url = request.url_root.rstrip("/")
+        endpoint_msg = f"event: endpoint\ndata: {base_url}/message?client_id={client_id}\n\n"
+        yield endpoint_msg
+
+        try:
+            while True:
+                try:
+                    msg = q.get(timeout=30)
+                    if msg is None:
+                        break
+                    yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                except queue.Empty:
+                    # heartbeat
+                    yield ": ping\n\n"
+        finally:
+            with client_lock:
+                client_queues.pop(client_id, None)
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                             "Access-Control-Allow-Origin": "*"})
+
+@app.route("/message", methods=["POST"])
+def message():
+    client_id = int(request.args.get("client_id", 0))
+    data = request.get_json()
+    response = handle_jsonrpc(data)
+    if response is not None:
+        with client_lock:
+            q = client_queues.get(client_id)
+            if q:
+                q.put(response)
+    return jsonify({"status": "accepted"}), 202
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, threaded=True)
