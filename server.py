@@ -1,3 +1,4 @@
+import os
 import requests
 import yfinance as yf
 import pytz
@@ -20,14 +21,13 @@ TICKERS = {
 
 @mcp.tool()
 def get_portfolio(owner: str = "전체") -> str:
-    """가족 포트폴리오 주식 데이터를 조회한다. owner는 이현규/임인숙/이재현/이재연/전체 중 선택."""
+    """가족 포트폴리오 주식 데이터를 조회한다."""
     if owner == "전체":
         targets = TICKERS
     elif owner in TICKERS:
         targets = {owner: TICKERS[owner]}
     else:
-        return f"{owner}의 계좌 정보가 없습니다. 이현규/임인숙/이재현/이재연/전체 중 선택하세요."
-
+        return f"{owner}의 계좌 정보가 없습니다."
     result = []
     for name, tickers in targets.items():
         result.append(f"[{name} 계좌]")
@@ -61,8 +61,6 @@ def get_discharge_countdown() -> str:
         return f"이재현 전역 D-{dday} (거의 다 왔다!)"
     elif dday <= 30:
         return f"이재현 전역 D-{dday} (한 달 남음)"
-    elif dday <= 100:
-        return f"이재현 전역 D-{dday} (약 {dday//30}개월 남음)"
     else:
         return f"이재현 전역 D-{dday} (전역일: 2027년 7월 26일)"
 
@@ -73,7 +71,7 @@ def get_changwon_weather() -> str:
         url = (
             "https://api.open-meteo.com/v1/forecast"
             f"?latitude={CHANGWON_LAT}&longitude={CHANGWON_LON}"
-            "&current=temperature_2m,precipitation_probability,weathercode,windspeed_10m"
+            "&current=temperature_2m,precipitation_probability,weathercode"
             "&timezone=Asia%2FSeoul"
         )
         resp = requests.get(url, timeout=10)
@@ -82,7 +80,6 @@ def get_changwon_weather() -> str:
         current = data["current"]
         temp    = current["temperature_2m"]
         precip  = current["precipitation_probability"]
-        wind    = current["windspeed_10m"]
         code    = current["weathercode"]
         weather_map = {
             0: "맑음", 1: "대체로 맑음", 2: "구름 조금", 3: "흐림",
@@ -94,13 +91,13 @@ def get_changwon_weather() -> str:
             95: "뇌우", 96: "뇌우", 99: "뇌우"
         }
         desc = weather_map.get(code, "알 수 없음")
-        return f"창원 현재 날씨: {desc} {temp}°C / 강수확률 {precip}% / 풍속 {wind}km/h"
+        return f"창원 날씨: {desc} {temp}°C / 강수확률 {precip}%"
     except Exception:
         return "날씨 조회 실패"
 
 @mcp.tool()
 def get_weekly_performance(owner: str = "이현규") -> str:
-    """특정 계좌의 주간 수익률을 조회한다. owner는 이현규/임인숙/이재현/이재연 중 선택."""
+    """특정 계좌의 주간 수익률을 조회한다."""
     if owner not in TICKERS:
         return f"{owner}의 계좌 정보가 없습니다."
     tickers = TICKERS[owner]
@@ -121,15 +118,6 @@ def get_weekly_performance(owner: str = "이현규") -> str:
             result.append(f"  {ticker}: 조회 실패")
     return "\n".join(result)
 
-@mcp.tool()
-def get_today_info() -> str:
-    """오늘 날짜, 요일, 전역 D-day를 한번에 반환한다."""
-    now   = datetime.now(KST)
-    days  = ["월", "화", "수", "목", "금", "토", "일"]
-    today = f"{now.strftime('%Y년 %m월 %d일')} {days[now.weekday()]}요일"
-    dday  = get_discharge_countdown()
-    weather = get_changwon_weather()
-    return f"{today}\n{dday}\n{weather}"
-
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    port = int(os.environ.get("PORT", 8000))
+    mcp.run(transport="sse", host="0.0.0.0", port=port)
