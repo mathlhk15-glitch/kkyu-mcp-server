@@ -65,7 +65,7 @@ def get_discharge_countdown():
     elif dday <= 30:
         return f"이재현 전역 D-{dday} (한 달 남음)"
     else:
-        return f"이재현 전역 D-{dday} (전역일: 2027년 7월 26일)"
+        return f"이재현 전역 D-{dday} (전역일: 2027년 7월 25일)"
 
 def get_changwon_weather():
     try:
