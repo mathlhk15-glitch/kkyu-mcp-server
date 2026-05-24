@@ -164,16 +164,22 @@ def handle_jsonrpc(data):
 def index():
     return jsonify({"status": "ok", "name": "뀨의 AI 임무 통제실 MCP 서버"})
 
-@app.route("/sse", methods=["GET"])
+@app.route("/sse", methods=["GET", "POST"])
 def sse():
+    if request.method == "POST":
+        data = request.get_json()
+        response = handle_jsonrpc(data)
+        if response:
+            return jsonify(response)
+        return jsonify({"status": "ok"}), 202
+
     client_id = id(request)
+    base_url = request.url_root.rstrip("/")  # ← 여기로 이동
     q = queue.Queue()
     with client_lock:
         client_queues[client_id] = q
 
     def generate():
-        # 엔드포인트 URL 전송 (Claude가 POST할 주소)
-        base_url = request.url_root.rstrip("/")
         endpoint_msg = f"event: endpoint\ndata: {base_url}/message?client_id={client_id}\n\n"
         yield endpoint_msg
 
